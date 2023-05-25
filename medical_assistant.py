@@ -1,73 +1,66 @@
-import os
-import json
+import gradio as gr
 import openai
-#import UI_journal_assistant
-
-
-def transcribe_audio(audio_path):
-    with open(audio_path, "rb") as audio_file:
-        transcript = openai.Audio.transcribe("whisper-1", audio_file)
-    return transcript["text"]
-
-json_path = "key.json"
-with open(json_path, "r") as f:
-    keys = json.load(f)
-openai_key = keys["api_key"]
-
+import json
 
 def get_openai_key(json_path):
     with open(json_path, "r") as f:
         keys = json.load(f)
     return keys["api_key"]
 
+openai_key = get_openai_key("key.json")
 openai.api_key = openai_key
 
+transcription_text = None
 
-def generate_journal_summary(text):
+def transcribe(audio):
+    global transcription_text, message_history
+    file = open(audio, "rb")
+    transcription = openai.Audio.transcribe("whisper-1", file)
+
+    transcription_text = transcription["text"]
+
+    message_history =[
+        {"role": "assistant", "content": f"Transkribering: {transcription_text}"},
+        {"role": "system", "content": "Du är en journalassistent inom hälso-och sjukvården."}]
+
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "Du är en journalassistent inom hälso-och sjukvården."},
-            {"role": "user", "content": f"Summanfatta innehåll av text: {text}"},
-        ],
+        model= "gpt-3.5-turbo",
+        messages=message_history
     )
-    return response.choices[0].message.content
 
+    AImessage = response["choices"][0]["message"]["content"]
+    message_history.append({"role": "assistant", "content": AImessage})
+    return transcription_text
 
-def chat_with_journal_assistant(text):
-    conversations = [{"role": "user", "content": f"Summanfatta innehåll av text: {text}"}]
+def chat_dialog(input):
+    global message_history
+    message_history.append({"role":"user", "content": input})
 
-    while True:
-        content = input("Vårdpersonal: ")
-        conversations.append({"role": "user", "content": content})
+    completion = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages = message_history
+    )
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=conversations,
-        )
+    reply_content = completion.choices[0].message.content
 
-        chat_response = response.choices[0].message.content
-        print(f'AI-Journalassistent: {chat_response}\nFinish reason for message: {response.choices[0].finish_reason}\n')
-        conversations.append({"role": "assistant", "content": chat_response})
+    message_history.append({"role": "user", "content": reply_content})
 
+    response = [(message_history[i]["content"], message_history[i +1]["content"]) for i in range (3, len(message_history) -1, 2)]
 
-def main():
-    audio_path = "cancer_meeting.m4a"
-    text = transcribe_audio(audio_path)
+    print(message_history)
+    return response
 
-    print("Transkriberar journal...")
-    print(f'Journalanteckning: {text}\n')
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    audio_file = gr.Audio(label = "Uppladdning av ljudfil",type='filepath')
+    trans_output = gr.outputs.Textbox(label="Transkribering av dikterad journal")
+    transcribe_btn = gr.Button("Transkribera uppladdad ljudfil")
+    transcribe_btn.click(fn=transcribe, inputs=audio_file, outputs=trans_output)
 
-    openai_key = get_openai_key("key.json")
-    openai.api_key = openai_key
+    chatbot = gr.Chatbot(label = "Chat konversation")
 
-    print("Inväntar journalassistent...\n")
+    with gr.Row():
+        txt = gr.Textbox(label = "Chatta", placeholder="Skriv ditt meddelande här").style(container=False)
+        txt.submit(chat_dialog, txt, chatbot)
+        txt.submit(lambda: "", None, txt)
 
-    journal_summary = generate_journal_summary(text)
-    print(f'AI-Journalassistent: {journal_summary}\n')
-
-    chat_with_journal_assistant(text)
-
-
-if __name__ == "__main__":
-    main()
+demo.launch(share=True)
